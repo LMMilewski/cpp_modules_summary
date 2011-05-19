@@ -1,0 +1,521 @@
+* Sources
+  http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2009/n2869.html
+* Introduction
+** definition
+  Modules are a mechanism to package libraries and encapsulate their
+implementations.  They differ from the C approach of translation units
+and header files primarily in that all entities are defined in just
+one place (even classes, templates, etc.)
+** goals
+ - Significantly improve build times of large projects
+ - Enable a better separation between interface and implementation
+ - Provide a viable transition path for existing librarie
+* Examples
+** importing
+*** source
+// File_1.cpp:
+namespace >> Lib {  // Define module
+  namespace << std;
+  export struct S {
+    S() { std::cout << “S()\n”; }
+};
+
+// File_2.cpp:
+namespace << Lib; // Import Lib module
+int main() {
+  Lib::S s;
+}
+*** S() is an inline function
+    it is expected that the call will be expanded inline using simple
+    compile-time technology
+*** insensitive to macro expansion
+*** nonmodule namespaces are called open namespaces
+** importing modules is not transitive (except for exported imports)
+// File_1.cpp:
+namespace >> M1 {
+  export typedef int I1;
+}
+// File_2.cpp:
+namespace >> M2 {
+  export typedef int I2;
+}
+// File_3.cpp:
+namespace >> MM {
+  export namespace << M1;  // Make M1 visible here and
+                           // in code that imports MM.
+  namespace << M2;         // Make M2 visible here,
+                           // but not in clients.
+}
+** private member is invisible in importing module
+// File_1.cpp:
+namespace >> Lib {
+  export struct S { void f() {} };  // Public f.
+  export class C { void f() {} };   // Private f.
+{
+// File_2.cpp:
+namespace << Lib;  // Private members invisible.
+struct D: Lib::S, Lib::C {
+  void g() {
+    f();  // Not ambiguous: Calls S::f.
+  }
+};
+
+** startup/shutdown module function (main, ~main)
+// File_1.cpp:
+namespace >> Lib {
+  namespace << std;
+  void main() { std::cout << “Hello “; }
+  void ~main() { std::cout << “World\n”; }
+}
+// File_2.cpp:
+namespace << Lib;
+int main() {}
+** module as program entry point
+namespace[”program”] >> P { // namespace attribute list
+  namespace << std;
+  void main() {
+    std::cout << “Hello World\n”;
+    std::exit(1);
+  }
+}
+*** main constraints
+    - no command-line argument list (assumes that standard library will be equipped with a facility to access command-line argument information)
+    - main can't return integer (use exit instead)
+** module partitions
+namespace << std[”vector_hdr”]; {
+   // Load definitions from std, but only those
+   // from the "vector_hdr" partition should
+   // be made visible.
+}
+-----
+namespace >> std[”vector_hdr”] {
+  export namespace << std[”allocator_hdr”];
+  // Additional declarations and definitions
+}
+*** 1778: extending module namespaces
+    - Unlike open namespaces, module namespaces cannote be extended
+      without partition mechanism (modules don't have truly open
+      scopes)
+    - when importing a module partition within the same module, all
+      declarations are visible
+*** partition name must be unique among the partions
+*** the dependency graph of the partitions must form a directed acyclic graph
+** nested modules
+*** must be declared in their enclosing module
+*** nested module can import its enclosing module
+*** enclosing module can import nested module
+*** partition cannot both declare and import a nested module
+*** can contain nested open namespaces (nonmodule namespaces)
+namespace >> Lib["part 1"] {
+  export namespace >> Lib::Nest;
+    // Nested module declaration.
+}
+** global namespaces (module, open)
+namespace["global"] >> std::core["new_hdr"] {
+  export namespace << std["stddef_hdr"];
+  export void* operator new(std::size_t);
+... //
+}
+*** for binary compatible transition from pre-module C++
+* Benefits
+** scalable build times
+   - build times on typical C=+ projects are not significantly
+     improving as hardware and compiler performance have made strides
+     forward (NOT TRUE?)
+   - client translation units need not be recompiled if private module
+     definitions change
+   - experience with similiar mechanizms in other languages shows that
+     modules solve the issue of excessive build times
+** shielding from macro interference
+   - no possibility that macro definition inadvertently change the
+     meaning of the code from an unrelated module
+   - macros affect only identifiers in the current translation unit
+** shielding from private members
+   - unfortunately private members are inaccessible but still
+     visible. Without it private out-of-class member declarations
+     become impractical to parse
+   - module namespaces appear to be an ideal boundary for making the
+     private member fully invisible
+** improved initialization order guarantees
+   - The module dependency graph defines a natural partial ordering
+     for the initialization of module variables
+** avoidance of undiagnosed ODR (one definition rule) problems
+// File_1.cpp:
+int global_cost;
+// File_2.cpp:
+extern unsigned global_cost;
+*** w.cpp:3: error: conflicting declaration 'unsigned int x'
+*** q.h:3: error: 'x' has a previous declaration as 'int x'
+** global optimization properties
+   - certain properties of a function can be established relatively
+     easily if these properties ar known for all the functions called
+     by the first function (i.e. throwing exceptions).
+   - with headers compiler requires to know all the code to apply such
+     optimizations
+   - with modules compiler is free to add to module specyfication any
+     interface information it can distill from the implementation
+** possible dynamic library famework
+   - C++ does not include concept of shared libraries / dynamically
+     linked libraries. This lead to profliferation of vendor specyfic
+     solutions
+** smooth transition path from pre-module C++
+   - nonmodule code is allowed to import modules while the reverse
+     cannot be done
+   - module partitions allows existing file organizations to be
+     retained (with exception for cyclic dependencies which are not
+     common)
+   - global module attribute enables binary-compatible transition from
+     a global namespace library
+   - modules are just a special kind of namespace
+* Optional features
+** auto-loading when first module use is encountered
+** exported macros
+** module seals
+** more than one partition per translation unit
+** program-directed module loading
+   - loading/unloading under program control
+** standard module file format
+* Specific constraints, semantics and practical implementation considerations
+** Module file describe
+   - exported declarations
+   - exported definitions except for definitions of noninline
+     functions, namespace scope variables, nontemplate static data
+     members (these can be compiled to separate object file)
+   - some nonexported entities that are referred to by exported
+     declarations, inline function definitions or private member
+     declarations
+** Non every modification of source code needs to result in updating module file
+** Module can store interface information that is not explicit in the source
+   - function won't throw any exception
+   - function won't read or write persistent state
+   - function won't leak the adress of its parameters
+** Lib::Core maps to Lib.Core.mf (complicated by file system constraints!)
+** Module dependencies
+   - when A imports B it is expected that A's module file will not
+     contain copy of B (only reference)
+   - dependencies among partitions must form a DAG
+   - initialization order among partitions is only defined up to the
+     partial ordereing of the partitions
+   - if a translation unit contains a module partition definition, it
+     must contain no declarations outside that partition definition
+** Startup and termination
+   - program can contain at most one program module and if it does it
+     (the program) cannot declare ::main()
+   - the module function main() is exectued as if it were the default
+     constructor of a module variable defined in a synthesized
+     partition dependent on all other partitions (~main() is executed
+     as if it were the destructor)
+   - main() and ~main() functions cannot
+     + be called explicitly
+     + they cannot be exported
+     + they cannot be declared without being defined
+     + they cannot be bound to a reference,
+     + their address cannot be taken
+   - within module partition variables ar initialized in the order
+     specified for a translation unit
+   - point of definition (not declaration) determines initialization
+     order
+   - the initialization of module variables in one module partition
+     must vomplete before initialiation of module variables in another
+     partition that has a dependency on the first partition
+   - the module variables and local static variables are destroyed in
+     reverse order of initialization
+** Linkage
+   - extern keyword can only be used for linkage specifications in
+     module definitions (for example cannot forward declare namespace
+     scope variable easily)
+   - in modules, names of exported entities have external linkage iff
+     they are exported
+** Exporting incomplete types
+   - it is common practice to declare a class type in header file
+     without defining that type
+   - to preserve this ability an imported class type is incompleted
+     unless its definition was exported
+// File_1.cpp:
+namespace >> Lib {
+  export struct S {};  // Export complete type.
+  export class C;      // Export incomplete type only.
+  class C { ... }
+}
+// File_2.cpp:
+namespace << Lib;
+int main() {
+  sizeof(lib::S); // Okay.
+  sizeof(Lib::C); // Error: Incomplete type.
+}
+** Explicit template specializations
+   - it has been suggested that modules might allow "private
+     specialization" of templates
+** 1778: friend declarations
+namespace >> Example {
+  namespace << Friends;
+  void p() { /* ... */ };
+  export template<typename T> class C {
+    friend void p();
+    friend Friends::F;
+    friend T;
+... //
+  };
+}
+*** First declaration is expected to be common. It is trivial
+*** Second is expected to be uncommon, but probably must be allowed.
+    - Private members of a class ar normally not visible outside the
+      module int which they are declared. An exception must be made to
+      out-of-module friends.
+    - Implementation must fully export the symbolic information on
+      private members of a class containing friend declaration
+    - On the importing side, the implementation must then make this
+      symbolic information visible to friend entities, but not
+      elsewhere
+*** Third is similar to the second
+** 1778: base classes
+   - Base classes are typically accessed through type conversion (not
+     name lookup, like private members). Thus deeming them "invisible"
+     outside enclosing modules is not enough.
+namespace >> Lib {
+  export struct B {};
+  export struct D: private B {
+    operator B&() { static B b; return b; }
+  };
+}
+
+namespace["program"] >> Prog {
+  namespace << Lib;
+  void main() {
+    B b;
+    D d;
+    b = d;  // Should invoke user-defined conversion.
+  };
+}
+   - if B were known to be a base class of D in Prog then assignment
+     b = d would fail. derived-to-base conversion is preferred over
+     user-defined conversion operator
+   - Outside the module containing a derived class, its private base
+     classes are not considered for derived-to-base or base-to-dervied
+     conversions
+** Syntax
+   - module instead of >>, import instead of <<
+module Lib {
+  import module Lib2;
+  export import module Lib3;  // Ugly?
+}
+  - using seems undesirable - used to indicate name aliasing
+  - export blocks
+namespace >> Lib {
+  export {
+    typedef int I;   // Exported.
+    typedef char C;  // Exported.
+  }
+}
+  - interface/implementation separation
+namespace >> Lib {
+export:
+  // Exported declarations.
+implementation:
+  // Implementation of exported interfaces.
+}
+** 1778: Rely on scoping to determine visibility
+   - all namespace scope declarations not enclosed in an unnamed
+     namespace could be deemed exported. To render declarations
+     invisible programmer would use unnamed namespaces
+   - Unnamed namespaces have external linkage and affect the name
+     mangling of their members. Putting code in unnamed namespaces
+     would require recompilation of client code
+** 1778: Namespace attributes
+   - attribute list could be placed first. This more easiliy
+     generalizes to other constructs that may not have keyword to
+     attach attributes to. Also quotation makrs are not necessery
+[[[[program]]]] namespace >> First {
+  namespace << std;
+  void main() { std::cout << "Hello World!\n" }
+}
+** 1778: partition names
+   - quotation marks could be removed from partition names. But it is
+     convenient and natural to name partitions after the file in which
+     they are defined.
+* 1964 major changes
+** use 'import' keyword instead of << (import namespace std;)
+** use 'export' keyword instead of >> (export namespace Lib)
+** use public instead of export
+export namespace Lib {  // Module definition.
+  import namespace std;
+public:
+  struct S {
+    S() { std::cout << “S()\n”; }
+  };
+}
+** mixed namespaces
+   - it may be possible to allow a namespaces to consist both of a
+   modular part and an open part, a situation we will refer to as a
+   mixed namespace
+** transitive importing
+   - importing a module is now transitive (only for public import
+   directives)
+** global namespace mapping
+   - all namespaces can be marked "global" to express that the names
+     of their memberes are reserved in the global namespace
+export namespace std["new_hdr"] { // Module namespace
+public:
+  import namespace std["stddef_hdr"];
+  [[[["global"]]]] namespace core {  // Open namespace
+    void* operator new(std::size_t);
+... //
+  }
+}
+** Transitioning a single-namespace library
+*** this code
+// Implementation File lib_1.cpp
+#include <basics.h>
+#include <lib.h>
+namespace Lib {
+  // Various declarations and definitions
+}
+*** would be turned into
+// Implementation File lib_1.cpp
+export namespace Lib["lib_1.cpp"] {
+  import namespace basics;
+public:
+  import namespace Lib["lib.h"];
+  // Various declarations and definitions
+}
+** Premium options
+*** startup/shutdown
+*** program module syntax
+export [["program"]] namespace P {
+  import namespace std;
+  void main() {
+    std::cout << “Hello World\n”;
+    std::exit(1);
+  }
+}
+*** nested modules
+*** prohibited members
+**** old code
+namespace N {
+  struct S {
+    void f(double);
+  private
+    void f(int);
+  };
+}
+void g(N::S &s) {
+  s.f(0);  // Access error
+}
+**** possible new code
+import namespace N;
+void g(N::S& s) {
+    s.f(0); // Selectes S::f(double)
+}
+**** solution ('prohibited')
+export namespace N {
+  struct S {
+    void f(double);
+  prohibited:
+    void f(int);  // Visible but not callable
+  };
+}
+** program-directed module loading
+   - unloaing requires different termination semantics: all the static
+     lifetime variables must be destroyed at that point (instead of in
+     strict reverse construction order)
+export [[[["dynamic"]]]] namespace Component {
+  // ...
+}
+** self-importing module
+   - when you want have your module initializers run without any
+     function in that translation unit explicitly being called from
+     another translation unit. You must somehow indicate that the
+     translation unit is part of the program
+export [["selfregister"]] namespace SpecialAlloc {
+...
+}
+** problems
+*** declarations outside module definitions
+    - current model assumes a bottom-up transition from headers to
+      modules. Making this strict requirement, howerver, is
+      unrealistic. i.e. C-based libs might never be able to transition
+    - this code must be accepted
+#include "unistd.h"
+export namespace Lib {
+  // Make use of "unistd.h"
+}
+   - this allows module to refer to entities that are not defined in
+     just one place
+*** open module file format
+    - Danger of hiding interface specifications in a proprietary
+      module file format (Header files present no such problem)
+    - This would discourage the development of software analysis tools
+      like Lint
+    - C++ standard is not the right place to specify format of module
+      file format
+** Rejected features
+*** module seals
+*** more than one partition per translation unit
+*** auto-loading
+*** exported macros
+* Plugins
+  - new standard type - std::plugin. It is exposed as as an incomplete
+    class type
+** defining 1
+export namespace P() {  // Parentheses indicate plugin
+public:                 // nature.
+  struct S {
+    void f() {}
+  };
+  S* g();
+//...
+}
+** defining 2
+[[[[plugin]]]] export namespace P {
+   // ...
+}
+** loading / unloading
+   - std::plugin* p = std::attach("/path/to/plugin/p.dyn");
+   - std::detach(p);
+   - import N(p) - assosiates a module namespaces with dynamically
+     attached plugin
+* 2073 major changes
+  - add 'prohibited' keyword to premium options
+  - add 'module registration' to premium options
+    + make compiler able to compare two "compiled module" files. That
+      would enable the implementation of a library to be checked
+      against its original formal specification.
+    + useful for plugins
+// Specification (= module registration):
+register export M {
+  struct S { virtual ~S(); };
+}
+// Implementation:
+export for M {
+  struct S {
+    ~S() {}  // Error: Should be virtual.
+  };
+}
+* 2316 major changes
+** nested module names (not nested modules!)
+   export Boost::MPL
+** prohibited members as feature
+** inline importing
+   - when module wants to interface to a nonmodule library, it needs
+     to be able to declare the contents of the nonmodule library. It
+     cannot #include its header, because taht would make each
+     declaration of the header a member of the current module
+export Mod:
+import { // inline import
+   extern "C" int printf(char const*, ...);
+#include <stdlib.h>
+}
+* Why not in standard
+  These topics are deemed too important to wait for another standard
+  after C++0x before being published, but too experimental to be
+  finalised in time for the next Standard. Therefore, these features
+  will be delivered by a technical report at the earliest opportunity.
+* Papers
+  http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2004/n1736.pdf
+  http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2005/n1778.pdf
+  http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2006/n1964.pdf
+  http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2006/n2006.pdf
+  http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2006/n2015.pdf
+  http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2006/n2073.pdf
+  http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2006/n2074.pdf
+  http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2007/n2316.pdf
